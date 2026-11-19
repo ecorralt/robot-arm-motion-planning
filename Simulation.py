@@ -159,3 +159,37 @@ class Robot_Simulator:
         print("Arm plotted successfully")
         print("opening window")
         plt.show()
+    # def trajectory_generator(self, theta_initial, theta_target, num_steps):
+    #     s_values = jnp.linspace(0,1,num_steps)
+    #     trajectory = []
+
+    #     for s in s_values:
+    #         angle_difference = theta_target-theta_initial
+    #         theta = theta_initial + s*(jnp.arctan2(jnp.sin(angle_difference),jnp.cos(angle_difference)))
+    #         trajectory.append(theta)
+    #     return trajectory
+
+    def advance_frame(self):
+        if self.frame_index >= len(self.trajectory):
+            self.timer.stop()
+            return
+        theta = self.trajectory[self.frame_index]
+        self.update_arm(theta)
+        self.frame_index +=1
+
+
+if __name__ == "__main__":
+    # Face the middle of the workspace, close to the outer reach limit.
+    HOME_THETA = np.array([np.pi / 2, 0.31, -np.pi / 6])
+
+    simulator = Robot_Simulator(
+        l1=1.5,
+        l2=1.0,
+        HOME_THETA=HOME_THETA,
+        
+
+    )
+
+    simulator.run()
+
+
