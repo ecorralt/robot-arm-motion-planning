@@ -4,7 +4,7 @@ from Kinematics import forward_kinematics , newton_raphson
 import numpy as np
 from mpl_toolkits.mplot3d import proj3d
 from matplotlib.widgets import Slider
-from trajectory_optimizer import optimizer, SHOULDER_LIMITS, ELBOW_LIMITS, BASE_LIMITS
+from trajectory_optimizer import optimizer, SHOULDER_LIMITS, ELBOW_LIMITS, BASE_LIMITS, MIN_TIP_HEIGHT
     
 
 class Robot_Simulator:
@@ -81,7 +81,7 @@ class Robot_Simulator:
             self.trajectory, self.duration = optimizer(
                 self.l1, self.l2, xtarget, ytarget, ztarget, self.N, np.asarray(self.theta)
             )
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             print(f"Could not plan trajectory: {exc}")
             return
     #= self.trajectory_generator(
@@ -120,32 +120,36 @@ class Robot_Simulator:
 
 
     def run(self):
-        # Trace the four edges of the allowed joint-angle rectangle.
-        samples = 300
-        s0, s1 = SHOULDER_LIMITS
-        e0, e1 = ELBOW_LIMITS
-        shoulder = np.concatenate((np.linspace(s0, s1, samples),
-                                   np.full(samples, s1),
-                                   np.linspace(s1, s0, samples),
-                                   np.full(samples, s0)))
-        elbow = np.concatenate((np.full(samples, e0),
-                                np.linspace(e0, e1, samples),
-                                np.full(samples, e1),
-                                np.linspace(e1, e0, samples)))
-        
+        # Maximum extension occurs at the elbow limit closest to straight.
+        elbow = ELBOW_LIMITS[1]
+        shoulder = np.linspace(*SHOULDER_LIMITS, 60)
         radius = self.l1 * np.cos(shoulder) + self.l2 * np.cos(shoulder + elbow)
         z = self.l1 * np.sin(shoulder) + self.l2 * np.sin(shoulder + elbow)
-        yaw = np.linspace(*BASE_LIMITS, 181)
+        valid = (z >= MIN_TIP_HEIGHT) & (radius >= 0)
+        yaw = np.linspace(*BASE_LIMITS, 60)
         x = np.outer(np.cos(yaw), radius)
         y = np.outer(np.sin(yaw), radius)
         height = np.broadcast_to(z, x.shape).copy()
-        height[(height < 0) | (y < -1e-10)] = np.nan
-        self.ax.plot_surface(x, y, height, color="tab:blue", alpha=0.12, linewidth=0)
+        height[:, ~valid] = np.nan
+        self.ax.plot_surface(x, y, height, color="tab:blue", alpha=0.12,
+                             linewidth=0, rcount=60, ccount=60)
+        horizontal_reach = float(np.max(radius[valid]))
+        # The most folded elbow angle defines the inner reach boundary.
+        inner_elbow = ELBOW_LIMITS[0]
+        inner_radius = self.l1 * np.cos(shoulder) + self.l2 * np.cos(shoulder + inner_elbow)
+        inner_z = self.l1 * np.sin(shoulder) + self.l2 * np.sin(shoulder + inner_elbow)
+        inner_valid = (inner_z >= MIN_TIP_HEIGHT) & (inner_radius >= 0)
+        inner_x = np.outer(np.cos(yaw), inner_radius)
+        inner_y = np.outer(np.sin(yaw), inner_radius)
+        inner_height = np.broadcast_to(inner_z, inner_x.shape).copy()
+        inner_height[:, ~inner_valid] = np.nan
+        self.ax.plot_surface(inner_x, inner_y, inner_height, color="tab:blue", alpha=0.12,
+                             linewidth=0, rcount=60, ccount=60)
         reach = self.l1 + self.l2
-        self.ax.set_xlim(-reach, reach)
-        self.ax.set_ylim(0, reach)
+        self.ax.set_xlim(-horizontal_reach, horizontal_reach)
+        self.ax.set_ylim(0, horizontal_reach)
         self.ax.set_zlim(0, reach)
-        self.ax.set_box_aspect((2, 1, 1))
+        self.ax.set_box_aspect((2 * horizontal_reach, horizontal_reach, reach))
         self.ax.set_xlabel("X")
         self.ax.set_ylabel("Y")
         self.ax.set_zlabel("Z (height)")

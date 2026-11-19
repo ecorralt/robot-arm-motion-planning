@@ -4,6 +4,7 @@ from Kinematics import newton_raphson
 SHOULDER_LIMITS = (0.0, np.pi * 4 / 9)
 ELBOW_LIMITS = (-np.pi * 11 / 12, -np.pi / 6)
 BASE_LIMITS = (0.0, np.pi)
+MIN_TIP_HEIGHT = 0.15
 
 N = 30
 joint = 3
@@ -30,7 +31,22 @@ def optimizer(L1, L2, x_target, y_target, z_target, N, HOME_THETA):
     opti.subject_to(opti.bounded(SHOULDER_LIMITS[0], theta[1, :], SHOULDER_LIMITS[1]))
     opti.subject_to(opti.bounded(ELBOW_LIMITS[0], theta[2, :], ELBOW_LIMITS[1]))
 
-    theta_target = newton_raphson(HOME_THETA, np.array([x_target, y_target, z_target]), L1, L2)
+    # Seed IPOPT with the elbow-up IK branch inside the configured limits.
+    # Unconstrained Newton iterations can converge to an equivalent pose on
+    # the opposite side of the base or outside the joint limits.
+    radial = np.hypot(x_target, y_target)
+    cos_elbow = (radial**2 + z_target**2 - L1**2 - L2**2) / (2 * L1 * L2)
+    if not np.isfinite(cos_elbow) or abs(cos_elbow) > 1 + 1e-10:
+        raise ValueError("Target is outside the arm's geometric reach")
+    elbow_target = -np.arccos(np.clip(cos_elbow, -1, 1))
+    base_target = np.arctan2(y_target, x_target) if radial > 1e-10 else HOME_THETA[0]
+    shoulder_target = np.arctan2(z_target, radial) - np.arctan2(
+        L2 * np.sin(elbow_target), L1 + L2 * np.cos(elbow_target))
+    theta_target = np.array([base_target, shoulder_target, elbow_target])
+    for name, angle, limits in zip(("base", "shoulder", "elbow"), theta_target,
+                                   (BASE_LIMITS, SHOULDER_LIMITS, ELBOW_LIMITS)):
+        if angle < limits[0] - 1e-8 or angle > limits[1] + 1e-8:
+            raise ValueError(f"Target is outside the {name} joint limits")
     initial_trajectory = np.linspace(HOME_THETA,theta_target,N + 1).T
 
     opti.set_initial(theta, initial_trajectory)
@@ -51,7 +67,7 @@ def optimizer(L1, L2, x_target, y_target, z_target, N, HOME_THETA):
     opti.subject_to(y[N] == y_target)
     opti.subject_to(z[N] == z_target)
     for i in range(N + 1):
-        opti.subject_to(z[i] >= .15)
+        opti.subject_to(z[i] >= MIN_TIP_HEIGHT)
     # Ensure y is non-negative for all time steps
     
     delta_theta = theta[:, 1:] - theta[:, :-1]##this works since the : is able to iterate 
