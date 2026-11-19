@@ -10,6 +10,17 @@ The simulator models a robotic arm with three degrees of freedom and uses numeri
 
 The project focuses on understanding the mathematical foundations of robot motion planning and implementing them in Python.
 
+## Installation
+
+Clone the repository:
+
+git clone https://github.com/YOUR_USERNAME/robot-arm-motion-planning.git
+cd robot-arm-motion-planning
+
+Install dependencies:
+
+python3 -m pip install -r requirements.txt
+
 ## Features
 
 - **Forward Kinematics:** Calculate the end-effector position from the robot's joint angles.
