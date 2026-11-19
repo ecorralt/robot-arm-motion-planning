@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from Kinematics import forward_kinematics , newton_raphson 
 import numpy as np
 from mpl_toolkits.mplot3d import proj3d
-from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import Slider
 from trajectory_optimizer import optimizer, SHOULDER_LIMITS, ELBOW_LIMITS, BASE_LIMITS
     
 
@@ -17,7 +17,6 @@ class Robot_Simulator:
         self.frame_index = 0
         self.N = 30
         self.target_height = 0.25
-        self.click_start = None
         self.fig = plt.figure()
         self.fig.subplots_adjust(bottom=0.25)
         self.ax = self.fig.add_subplot(111, projection="3d")
@@ -28,6 +27,7 @@ class Robot_Simulator:
         self.ax.mouse_init(rotate_btn=[], zoom_btn=[])
         self.ax.set_navigate(False)
         self.arm_line, = self.ax.plot([], [], [], "o-", markersize = 8, linewidth = 3)
+        self.target_ring, = self.ax.plot([], [], [], color="tab:orange", linewidth=1.5, alpha=0.8)
         self.timer = self.fig.canvas.new_timer(interval=self.duration/self.N*1000)  # interval in milliseconds
         self.r = self.l1*jnp.cos(self.theta[1])+ self.l2*jnp.cos(self.theta[1] + self.theta[2])
         
@@ -40,9 +40,6 @@ class Robot_Simulator:
         speed_ax = self.fig.add_axes([0.22, 0.08, 0.40, 0.03])
         self.speed_slider = Slider(speed_ax, "Speed", 0.25, 4.0, valinit=1.0, valfmt="%.2fx")
         self.speed_slider.on_changed(lambda value: self.set_animation_interval(value))
-        button_ax = self.fig.add_axes([0.68, 0.03, 0.20, 0.07])
-        self.test_button = Button(button_ax, "Test move")
-        self.test_button.on_clicked(lambda event: self.plan_move(0.8, 1.0, self.target_height))
 
     def set_animation_interval(self, speed):
         self.timer.interval = max(1, round(self.duration / self.N * 1000 / speed))
@@ -51,17 +48,12 @@ class Robot_Simulator:
         self.ax.view_init(elev=elevation, azim=90)
         self.fig.canvas.draw_idle()
 
-    def on_press(self, event):
-        self.click_start = (event.x, event.y) if event.button == 1 else None
-
     def on_click(self, event):
         print("Click Detected")
         
         if event.inaxes != self.ax:
             return
         if event.button != 1 or event.xdata is None or event.ydata is None:
-            return
-        if self.click_start is None or np.hypot(event.x - self.click_start[0], event.y - self.click_start[1]) > 5:
             return
         # Unproject two depths to form a world-space viewing ray, then
         # intersect it with the horizontal pickup/placement plane.
@@ -76,6 +68,12 @@ class Robot_Simulator:
         self.plan_move(*point)
 
     def plan_move(self, xtarget, ytarget, ztarget):
+        angle = np.linspace(0, 2 * np.pi, 65)
+        radius = 0.025 * (self.l1 + self.l2)
+        self.target_ring.set_data_3d(xtarget + radius * np.cos(angle),
+                                     ytarget + radius * np.sin(angle),
+                                     np.full_like(angle, ztarget))
+        self.fig.canvas.draw_idle()
         self.timer.stop()
         print(f"Target selected: ({xtarget:.3f}, {ytarget:.3f}, {ztarget:.3f})")
 
@@ -152,8 +150,7 @@ class Robot_Simulator:
         self.ax.set_ylabel("Y")
         self.ax.set_zlabel("Z (height)")
         self.ax.grid(False)
-        self.fig.canvas.mpl_connect("button_press_event", self.on_press)
-        self.fig.canvas.mpl_connect("button_release_event", self.on_click)
+        self.fig.canvas.mpl_connect("button_press_event", self.on_click)
 
 
 
@@ -162,423 +159,3 @@ class Robot_Simulator:
         print("Arm plotted successfully")
         print("opening window")
         plt.show()
-    # def trajectory_generator(self, theta_initial, theta_target, num_steps):
-    #     s_values = jnp.linspace(0,1,num_steps)
-    #     trajectory = []
-
-    #     for s in s_values:
-    #         angle_difference = theta_target-theta_initial
-    #         theta = theta_initial + s*(jnp.arctan2(jnp.sin(angle_difference),jnp.cos(angle_difference)))
-    #         trajectory.append(theta)
-    #     return trajectory
-
-    def advance_frame(self):
-        if self.frame_index >= len(self.trajectory):
-            self.timer.stop()
-            return
-        theta = self.trajectory[self.frame_index]
-        self.update_arm(theta)
-        self.frame_index +=1
-
-
-if __name__ == "__main__":
-    HOME_THETA = np.array([0 , 0.5, -np.pi / 6])  # elbow-up starting pose
-
-    simulator = Robot_Simulator(
-        l1=1.5,
-        l2=1.0,
-        HOME_THETA=HOME_THETA,
-        
-
-    )
-
-    simulator.run()
-    ### ask Yulei Fu <yuleifu@umich.edu>
-    ##  Sydney Ragla <sydragla@umich.edu>
-
-
-# TODO: Revisit IK and path planning before changing the implementation.
-# Goal: move from Newton-Raphson IK toward path planning / trajectory
-# optimization using gradient descent with equality constraints.
-# Roadmap: validate the current planar 2-DOF model, then extend to a spatial
-# 3-DOF positioning arm with base yaw, shoulder pitch, and elbow pitch.
-# Working assumption: the rotating base is INCLUDED in the three arm DOFs.
-# Treat end-effector actuation separately; a wrist adds arm DOFs, whereas
-# gripper opening does not by itself add independent tool-pose control.
-#
-# READ FIRST -- ROB 201: Jessy Grizzle, Calculus for the Modern Engineer
-# Source: Desktop/ROB 201 TEXTBOOk.pdf (2026 edition).
-# Page numbers below are printed book pages; PDF viewer page = book page + 16.
-# Suggested reading order:
-# 1. Sections 5.6-5.8, pp. 301-328: partial derivatives, Jacobians,
-#    gradients, and the chain rule. Review 5.3.3, p. 273, for automatic
-#    differentiation and how it relates to the JAX derivatives already used.
-# 2. Sections 6.2.1-6.2.3, pp. 338-348: root finding versus minimization,
-#    then the gradient descent algorithm and step-size choices.
-# 3. Sections 6.3.1-6.3.4, pp. 356-368: constrained optimization vocabulary,
-#    gradient descent with one equality constraint, then vector constraints.
-#    Section 6.3.4 is the main starting point for this project.
-# 4. Sections 6.3.5-6.3.6, pp. 369-380: Lagrange multipliers for scalar
-#    and vector equality constraints (6.3.6 is marked optional).
-# 5. Section 6.3.7, pp. 381-384: the 3-link manipulator example with
-#    inequality constraints. Its planar 3-link geometry is NOT the same as
-#    a base-yaw plus two-pitch spatial arm; reuse optimization ideas, not FK.
-# 6. Optional deeper reading: 6.6, pp. 414-415, and 6.7, pp. 416-419,
-#    for the proofs behind multipliers and equality-constrained descent.
-#
-# DECIDE ON THE PROBLEM BEFORE CODING:
-# - IK finds joint angles for one endpoint; path planning finds a sequence
-#   of configurations. Gradient descent is an optimization method, so define
-#   the path variables, objective, and constraints explicitly.
-# - Possible path variables: q[0], ..., q[N], each containing d joint angles
-#   (d=2 now; d=3 for base yaw + shoulder pitch + elbow pitch).
-#   Example objective: sum(||q[k+1] - q[k]||^2), with a second-difference
-#   term if smoothness is needed. Choose weights and angle conventions.
-# - Example equalities: q[0] = current_angles and FK(q[N]) = target.
-#   If following a prescribed Cartesian path, use FK(q[k]) = p[k] instead.
-#   Do not force every waypoint to equal the final target.
-# - For a nonsingular 2-DOF arm, fixing both endpoint coordinates leaves
-#   no local joint-space freedom at that waypoint. Likewise, three spatial
-#   position constraints generally use all three DOFs of the future arm.
-#   Research Jacobian rank/null spaces; a third joint is not automatically
-#   redundancy when the task grows from 2D position to 3D position.
-# - Plain gradient descent does not enforce equality constraints. Study
-#   projected / tangent-space descent plus nonlinear feasibility correction,
-#   and compare augmented Lagrangian and SQP approaches. A finite penalty
-#   on endpoint error alone does not guarantee an exact equality.
-#
-# RESEARCH / CHECK BEFORE IMPLEMENTING:
-# - Current planar reachability: abs(l1-l2) <= distance <= l1+l2. For the
-#   spatial arm, derive reachability in the shoulder frame with base height,
-#   offsets, tool geometry, and joint bounds; do not apply that annulus
-#   blindly to the world-frame tool position. Check elbow and base-axis
-#   singularities, IK branches, and bounded versus continuous base rotation.
-# - Nonconvexity, local minima, initialization, warm starts, and backtracking
-#   line search. Constrained descent need not find a global solution.
-# - Joint limits and obstacle clearance are INEQUALITIES. Collision checks
-#   must cover links, base, tool, payload, self-collision, and motion between
-#   waypoints, not just the tip; expand from planar geometry to 3D volumes.
-# - A geometric path still needs timing: velocity/acceleration limits and
-#   sampling for animation. Optimizer iterations are not physical time steps.
-# - Track objective change, constraint residual, stationarity, iteration
-#   limits, and finite values; report infeasibility/nonconvergence explicitly.
-# - Validate on reachable targets, unreachable clicks, near-singular poses,
-#   repeated clicks, and both IK branches. Compare endpoints with analytic
-#   2-link IK and verify JAX gradients against finite differences.
-# - Keep optimization from blocking the GUI event loop during future work.
-# - Recheck solver termination in Kinematics.py before using it as a
-#   baseline: the reviewed version returns after exhausting iterations
-#   without reporting failure (see the implementation checklist below).
-# Further reference: Boyd & Vandenberghe, Convex Optimization, Chs. 9-10:
-# https://web.stanford.edu/~boyd/cvxbook/
-# Its convex/affine-constraint theory is useful background; this arm's
-# nonlinear kinematic equalities generally make the problem nonconvex.
-
-#
-# PROGRAMMING PREPARATION -- WHAT TO LEARN AND PRACTICE:
-# Work through these in order; each exercise should run without the GUI.
-#
-# 1. Python and array basics:
-#    Be comfortable writing functions with arguments/return values, loops,
-#    classes, imports, exceptions, and assertions. Know scope and indentation:
-#    a return inside an iteration ends the whole function immediately.
-#    Practice indexing, slicing, broadcasting, and the difference between
-#    elementwise multiplication (*) and matrix multiplication (@).
-#    Exercise: store a path as an array of shape (N+1, d), then compute its
-#    first and second differences without mixing waypoint and joint axes.
-#
-# 2. Linear algebra needed for the implementation:
-#    Learn vector norms, dot products, transposes, matrix dimensions, rank,
-#    null spaces, least squares, pseudoinverses, and singular values (SVD).
-#    Solve linear systems rather than explicitly computing matrix inverses.
-#    Understand how poor conditioning magnifies numerical errors and why
-#    damping/regularization changes a computed step.
-#    Exercise: inspect the current 2x2 position Jacobian, then the future
-#    3x3 spatial-position Jacobian. Distinguish these from a 6xd geometric
-#    Jacobian (linear/angular velocity); inspect singular values at elbow
-#    extension and when the tool lies on the base rotation axis.
-#
-# 3. Translate calculus into functions with explicit shapes:
-#    Write down the scalar objective f(z) and vector constraint c(z) = 0.
-#    If z has n entries and c has m entries, grad(f) has shape (n,) and
-#    the constraint Jacobian A = dc/dz has shape (m, n).
-#    For a path, learn how to flatten (N+1, d) into z and reshape it back.
-#    Exercise: implement cost(path), constraints(path), and their derivatives
-#    independently, and check their values/shapes on a tiny three-pose path.
-#
-# 4. JAX skills:
-#    Learn pure functions: calculate outputs from inputs without modifying
-#    simulator state, drawing, or printing inside differentiated functions.
-#    Use jax.grad for a scalar cost and jax.jacfwd for vector constraints.
-#    Understand immutable arrays and .at[index].set(...); keep differentiable
-#    calculations in jax.numpy rather than converting to ordinary NumPy.
-#    Learn dtype/precision and choose tolerances appropriate to the dtype.
-#    Validate derivatives with central finite differences at several step
-#    sizes. Add jit/vmap only after an ordinary implementation is correct;
-#    learn tracing and control-flow restrictions before compiling the solver.
-#
-# 5. Build unconstrained gradient descent first:
-#    Start with a simple quadratic whose minimum is known, then try the
-#    endpoint loss 0.5 * ||FK(theta) - target||^2 as a learning exercise.
-#    Its gradient is J(theta).T @ (FK(theta) - target).
-#    Learn learning-rate selection, backtracking, iteration limits, and
-#    stopping criteria. Log cost and gradient norm to diagnose failures.
-#    This exercise is soft target fitting, not yet equality-constrained
-#    planning; a small gradient alone does not prove the target was reached.
-#
-# 6. Learn how a constrained update is constructed:
-#    For c(z) = 0, linearization gives c(z+d) approximately c(z) + A @ d.
-#    At a feasible point, a tangent direction satisfies A @ d = 0.
-#    Away from feasibility, a correction aims for A @ d = -c(z).
-#    Research how the textbook combines descent and constraint correction;
-#    projection onto a tangent space alone can drift off nonlinear constraints.
-#    Practice on minimizing distance to a point subject to x*x + y*y = 1.
-#    Track both objective and equality residual, including an infeasible start.
-#    Then study multipliers/KKT stationarity: grad(f) + A.T @ lambda = 0.
-#    Keep objective, feasibility, and stationarity tolerances separate.
-#
-# 7. Assemble the path problem in small stages:
-#    Begin with a few waypoints and no obstacles. Fix the start by leaving
-#    it out of the optimization variables, or include it as an equality.
-#    Choose endpoint constraints, initialize a path, and inspect its cost,
-#    derivatives, and residuals before attempting an optimization loop.
-#    Compare against joint interpolation; without obstacles or extra tasks,
-#    a simple interpolated path may already meet the geometric requirements.
-#    Add joint bounds, collision handling, and timing only after the basic
-#    constrained problem works. Clipping angles can break other constraints.
-#
-# 8. Design a solver interface before connecting it to Matplotlib:
-#    Keep kinematics, optimization, and display as separate responsibilities.
-#    Return a result containing path, success/status, iteration count,
-#    final cost, and constraint residual; preserve diagnostic failure reasons.
-#    The click handler should validate input, request a plan, and animate
-#    only an accepted result. Learn callbacks, timer state, cancellation,
-#    and how to reject stale results if another click arrives during planning.
-#
-# READY-TO-IMPLEMENT CHECK:
-# Can I explain every variable's shape, derive/check each derivative, solve
-# the circle exercise, detect infeasibility, and distinguish numerical
-# convergence from a physically usable path? If not, revisit that step first.
-
-#
-# IMPLEMENTATION CHECKLIST -- REVIEWED AGAINST BOTH FILES, 2026-11-14
-# These are tasks for me to implement, not changes already made to the solver.
-# References use function names so they survive edits and shifting line numbers.
-#
-# [ ] Kinematics.py / newton_raphson: fix the failure contract before using
-#     it as a baseline. The current return AFTER the loop silently accepts
-#     iteration exhaustion; the following raise is unreachable. The earlier
-#     one-iteration return is no longer present. Distinguish convergence,
-#     max iterations, singularity, and nonfinite output in any replacement.
-# [ ] Kinematics.py / forward_kinematics: keep this a small, pure function.
-#     Document radians, length units, and joint order. Today shape (2,)
-#     means shoulder/elbow relative angles; future shape (3,) means
-#     base/shoulder/elbow. Existing theta[1] assumptions will change.
-#     Validate positive finite link lengths
-#     at the program boundary rather than inside every differentiated call.
-# [ ] Kinematics.py: decide whether endpoint IK remains a separate helper
-#     for initialization/reference. Put the new path optimizer in a separate
-#     module if its responsibilities outgrow kinematics; avoid a giant file.
-#     Do not just rename newton_raphson to gradient_descent: define the new
-#     inputs, outputs, objective, equalities, and failure behavior first.
-# [ ] Kinematics.py / derivatives: expose or construct a reusable Jacobian
-#     function; check it numerically. Research rank/conditioning using SVD.
-#     The commented sin(theta[1]) measure refers to the CURRENT planar
-#     elbow index. In a base-first vector, the elbow moves to index 2.
-#     Do not reuse this scalar test as a complete 3D singularity detector.
-# [ ] New planner: document z, f(z), c(z), their units, and all array shapes.
-#     Choose whether to eliminate the fixed initial pose from z. Avoid
-#     redundant constraints: they can make multiplier/projection solves
-#     rank-deficient even when the physical problem has a valid solution.
-# [ ] New planner: implement the textbook's equality-constrained method in
-#     isolation first. Verify feasibility correction, descent acceptance,
-#     stationarity, and termination before asking it to move the robot.
-#     Use linear solves/least squares; define a response to deficient rank.
-#
-# [ ] Simulation.py / imports and on_click: replace the direct endpoint-IK
-#     call with the chosen planner interface once the planner is validated.
-#     Pass a snapshot of the CURRENT displayed angles as the initial pose.
-#     Handle invalid coordinates, infeasible goals, and failed solves;
-#     never feed a failed or NaN-containing path to the animation timer.
-# [ ] Simulation.py / on_click: define what happens if a new request fails
-#     after timer.stop(): remain at the current pose or resume the old plan.
-#     If planning becomes asynchronous, identify requests and discard stale
-#     results. Keep all Matplotlib updates on the GUI thread.
-# [ ] Simulation.py / trajectory_generator: distinguish a seed path from
-#     an optimized path and a timed trajectory. Do not interpolate over an
-#     optimized path in a way that destroys its verified constraints.
-#     The current shortest-angle wrapping assumes freely periodic joints;
-#     bounded joints/cables and obstacles may require a longer route.
-#     Choose a continuous angle representation for optimization: wrapping
-#     inside the objective introduces a discontinuity at the +/-pi branch.
-# [ ] Simulation.py / __init__: separate waypoint count, optimizer iteration
-#     limit, animation interval, and physical duration into named settings.
-#     Ten poses and a 30 ms timer do not enforce speed/acceleration limits.
-# [ ] Simulation.py / advance_frame and update_arm: define path shape and
-#     endpoint ownership, check completion, and synchronize displayed state
-#     with planner state. Consider elapsed-time sampling if frames are late;
-#     a GUI timer is not a real-time robot controller.
-# [ ] Simulation.py / get_coordinates: consider one function returning all
-#     joint positions so drawing and collision checks share the same geometry.
-#     Avoid needless tiny temporary arrays/conversions, but measure first.
-# [ ] Simulation.py / run: decide whether the full workspace should be shown;
-#     positive-only axes currently hide negative positions. Spatial base
-#     rotation requires 3D rendering, appropriate limits, and equal physical
-#     scale on x/y/z so geometry is not visually distorted.
-# [ ] Simulation.py / cleanup: give HOME_THETA one clear definition, use
-#     consistent names/docstrings, and move unrelated advising notes out of
-#     source code when convenient. Preserve useful diagnostics as structured
-#     results/logging rather than relying on scattered print statements.
-#
-# CONSTRAINTS AND ROBOTICS DECISIONS TO MAKE EXPLICIT:
-# [ ] Reachability is only a first filter. Joint bounds/obstacles can make a
-#     geometrically reachable endpoint infeasible. Two position equalities
-#     already use both local DOFs in 2D. In the future arm, three spatial
-#     position equalities generally use all three local DOFs. Arbitrary
-#     position AND orientation require more independent task freedom; a
-#     gripper alone does not supply it. Identify achievable task components.
-# [ ] Check the whole path, including between samples. Endpoint correctness
-#     does not establish collision clearance, branch continuity, or safe speed.
-#     A finer grid helps detect problems but alone is not a safety guarantee.
-# [ ] With time step dt, approximate speed with (q[k+1]-q[k])/dt and
-#     acceleration with (q[k+2]-2*q[k+1]+q[k])/(dt*dt). Define endpoint
-#     velocities and timing assumptions; limits are inequality constraints.
-# [ ] Separate planning from control. This kinematic simulation does not
-#     model torque, inertia, actuator saturation, tracking error, or hardware
-#     safety. Learn those before transferring a trajectory to a physical arm.
-#
-# PERFORMANCE, SLICING, AND TIME COMPLEXITY:
-# Let W = waypoints, d = arm joints (2 now, 3 planned), I = iterations,
-# m = scalar equalities, and B = candidate steps in one line search.
-# Bounds below describe particular operations, NOT guaranteed solver runtime.
-# [ ] Use a path array of shape (W,d). Neighbor differences can be expressed
-#     as path[1:] - path[:-1]; second differences as
-#     path[2:] - 2*path[1:-1] + path[:-2]. Each costs O(W*d) work/output
-#     storage. Review slice lengths and axes; slicing does not remove the
-#     arithmetic cost or guarantee a zero-copy view, especially under JAX.
-# [ ] In the current interpolation loop, angle_difference and its wrapped
-#     value do not depend on s: recognize loop-invariant work. Broadcasting
-#     s[:, None] against a (d,) difference can replace Python list appends.
-#     First establish the angle/constraint semantics; speed is secondary.
-# [ ] With a fixed 2- or 3-joint model, FK at one pose costs O(1); W poses
-#     cost O(W). For a general d-joint serial chain, a forward transform
-#     pass costs O(d) per pose. Local smoothness cost/gradient is O(W*d).
-#     Vectorization or vmap can reduce Python overhead; neither changes
-#     those asymptotic bounds, and GPU overhead may dominate tiny problems.
-# [ ] Unconstrained descent with such a cost is roughly O(I*W*d); B trial
-#     evaluations per iteration can multiply evaluation work by B. Equality
-#     enforcement adds work: do not quote the unconstrained bound for the
-#     complete constrained planner or assume a fixed convergence rate.
-# [ ] A dense m-by-n constraint Jacobian uses O(m*n) storage, with n about
-#     W*d. A dense projection approach using A @ A.T can cost O(n*m*m)
-#     to form plus O(m^3) to factor when appropriate/full rank. If m grows
-#     with W, this can dominate the simple path cost and worsen conditioning.
-#     Research QR/SVD, sparse/banded structure, and matrix-free products
-#     rather than blindly building dense inverses or normal equations.
-# [ ] A dense KKT solve of dimension n+m has O((n+m)^3) factorization work
-#     and O((n+m)^2) matrix storage. This applies if I choose that approach;
-#     it is not an unavoidable cost of every constrained descent algorithm.
-# [ ] Local waypoint coupling creates structure worth preserving. Endpoint-
-#     only equalities keep m small, while constraints at every waypoint can
-#     make it scale with W. Choose the formulation before optimizing code.
-# [ ] Collision checking against M obstacles at every pose is roughly
-#     O(W*d*M) for simple per-link/per-obstacle tests. Investigate spatial
-#     filtering and adaptive segment checks if this becomes the bottleneck.
-# [ ] Profile cost/gradient, constraint solves, collision checks, and drawing
-#     separately. For JAX, separate first-call compilation from warmed runs
-#     and wait for results with block_until_ready() when timing computation.
-#     Changing shapes can retrigger compilation; avoid repeated conversions
-#     and device-to-host transfers inside the optimization loop.
-# [ ] Bound iterations and line-search attempts; cancellation/budget limits
-#     need an explicit failure status. More waypoints or tighter tolerances
-#     trade runtime for resolution/accuracy, not guaranteed global success.
-#
-# LEARNING AND REVIEW HABITS -- EVIDENCE BEFORE ADDING FEATURES:
-# [ ] Build a headless example with a known answer before connecting the GUI.
-#     Verify shapes, finite values, derivative accuracy, feasibility, and the
-#     initial/final poses independently of the optimizer's success flag.
-# [ ] Keep regression cases for iteration exhaustion, unreachable targets,
-#     near-singular starts, angle branches, repeated clicks, and joint bounds.
-#     Compare geometric endpoints rather than requiring identical angles:
-#     multiple IK solutions can reach the same point.
-# [ ] Plot cost, equality residual, step size, and stationarity over iterations.
-#     Explain a failed run before tuning random constants or adding machinery.
-# [ ] Keep units/tolerances documented; scale mixed angle/position residuals
-#     intentionally. Save parameters and random seeds for reproducibility.
-# [ ] Make one conceptual change at a time in version control. Write down
-#     why the formulation works, which assumptions it needs, and one case
-#     that breaks it. Optimize measured bottlenecks after correctness.
-# [ ] Final self-review: can I justify the math, the array shapes, the failure
-#     behavior, the computational cost, and the physical meaning of the path?
-
-#
-# SPATIAL ARM AND END-EFFECTOR EXTENSION -- DESIGN CHECKLIST:
-# [ ] Confirm the mechanism: three arm joints TOTAL (base yaw, shoulder,
-#     elbow) is the assumption above. If adding a base to three existing
-#     arm joints, d=4 instead. Record every actuator, axis, range, zero
-#     position, sign, and whether it affects tool position or orientation.
-# [ ] Define what "end effector" means: fixed tool, actuated gripper, or
-#     wrist joint(s). Keep a fixed mounting transform in FK. Model gripper
-#     aperture as a separate state unless it is a planning variable; model
-#     wrist axes as additional joints if independent orientation is needed.
-# [ ] Learn right-handed coordinate frames, rotation matrices, homogeneous
-#     4x4 transforms, and transform composition before changing FK. Choose
-#     one convention (e.g. DH or product of exponentials), document it,
-#     and distinguish world, base, shoulder, wrist/flange, and tool frames.
-#     Rotations do not commute: base yaw cannot be added to a pitch angle.
-# [ ] Kinematics.py / forward_kinematics: preserve the planar model as a
-#     verified milestone, then derive spatial FK for the actual mechanism.
-#     Return tool position and orientation via a clear pose representation;
-#     expose all joint/link frames for visualization and collision checks.
-#     Include base height, joint offsets, and flange-to-tool displacement.
-# [ ] Derive a simple base-yaw-plus-planar-arm model on paper first. Verify
-#     that fixing base yaw at zero reproduces the chosen planar frame and
-#     that rotating only the base rotates the geometry about its actual axis.
-#     Handle the base-axis case where yaw can be undefined/nonunique; avoid
-#     assuming atan2(y,x) always produces a stable or unique IK branch.
-# [ ] Rework the target interface: a 2D mouse click does not uniquely select
-#     a 3D point. Choose a known work plane plus height, numeric xyz input,
-#     or a 3D selection method. A screen ray needs a depth/plane assumption.
-# [ ] Simulation.py / get_coordinates, plot_arm, update_arm, run: replace
-#     x/y-only geometry and 2D line updates with shared 3D joint positions,
-#     3D drawing, and explicit base/tool geometry. Keep camera interaction
-#     distinct from target selection, and preserve a useful planar debug view.
-# [ ] Generalize HOME_THETA, path allocation, shape checks, weights, limits,
-#     and indexing together. Use named joint indices/configuration rather
-#     than scattering literal 2s and 3s. Verify d=2 and d=3 intentionally;
-#     generality should follow real requirements, not speculative machinery.
-# [ ] Separate position-only reaching from grasp/placement tasks. Decide
-#     which approach direction or orientation components the mechanism can
-#     actually achieve. If orientation is optimized, learn rotation-space
-#     error measures; subtracting Euler angles creates wrapping/singularity
-#     problems. Use position and angular tolerances with distinct units.
-# [ ] Add constraints for base travel/cable winding, shoulder/elbow bounds,
-#     floor/table clearance, self-collision, and tool/payload clearance.
-#     Treat continuous yaw differently from a base with hard stops. During
-#     grasping, allowed contact and finger-object interaction need explicit
-#     task phases; requiring no contact everywhere would prevent the grasp.
-# [ ] Add timing for opening/closing the gripper and approach/grasp/lift/
-#     retreat stages. A grasp also needs object pose, grasp geometry, payload
-#     limits, and later feedback; reaching xyz alone is not successful grasping.
-# [ ] Keep rigid-tool offset separate from payload dynamics. Tool mass and
-#     payload change required torques, balance, tracking, and calibration;
-#     they do not create new kinematic DOFs. Learn basic rigid-body dynamics
-#     and joint control before claiming hardware execution is feasible.
-# [ ] Extend headless checks: zero pose, base-only rotation, tool offsets,
-#     known reachable xyz targets, points on/near the base axis, negative
-#     coordinates, joint limits, and tool orientation consistency. Compare
-#     analytic, finite-difference, and automatic position Jacobians.
-# [ ] Revisit complexity after adding DOFs/tool geometry: local costs remain
-#     linear in W*d, but dense constraint solves and collision pairs can
-#     dominate. Self-collision has up to O(d*d) candidate link pairs per
-#     waypoint before excluding adjacent/irrelevant pairs; tool geometry adds
-#     candidates. Use simple bounding volumes first, then finer checks.
-# [ ] Benchmark 2D and 3D milestones separately. More DOFs can increase IK
-#     branches or freedom, but more task constraints can remove that freedom.
-#     Track feasible-solve rate and physical path quality alongside speed.
-# [ ] Learning sequence: reliable planar solver -> frame/transform exercises
-#     -> spatial FK/Jacobian -> 3D target/display -> constrained 3D paths
-#     -> fixed tool model -> actuated gripper/task phases -> dynamics/control.
-#     Read the ROB 201 material above for optimization foundations; add a
-#     robotics text/course covering spatial kinematics, Jacobians, motion
-#     planning, manipulation, and control for the parts beyond that textbook.
