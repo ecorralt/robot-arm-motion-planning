@@ -29,6 +29,10 @@ python3 -m pip install -r requirements.txt
 - **Joint Constraints:** Incorporate shoulder and elbow joint limits into the optimization problem.
 - **3D Visualization:** Visualize the robotic arm and its motion using Matplotlib.
 
+## Demo
+
+https://github.com/YOUR_USERNAME/robot-arm-motion-planning/blob/main/demo/demo.mp4
+
 ## Technologies
 
 - **Python** — Main programming language
